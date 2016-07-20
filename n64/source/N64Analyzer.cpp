@@ -3,6 +3,7 @@
 #include <AnalyzerChannelData.h>
 #include <math.h>
 #include <cmath>
+#include <vector>
 
 N64Analyzer::N64Analyzer()
 :	Analyzer(),  
@@ -176,6 +177,8 @@ void N64Analyzer::WorkerThread()
 	// Move until it is low
 	mData->AdvanceToNextEdge();
 
+	std::vector<Frame> frames;
+
 	// We're now on a falling edge
 	for (;;) {
 		U64 low_start, low_end, high_end;
@@ -193,6 +196,9 @@ void N64Analyzer::WorkerThread()
 		high_end = mData->GetSampleNumber();
 		U64 high_duration = high_end - low_end;
 
+		Frame frame;
+		bool frame_valid = false;
+
 		if (low_duration >= one_us_low && low_duration <= one_us_high)
 		{
 			if (high_duration >= three_us_low)
@@ -208,41 +214,32 @@ void N64Analyzer::WorkerThread()
 				U64 halfway = low_start + (bit_end - low_start) / 2.0;
 				mResults->AddMarker( halfway, AnalyzerResults::Dot, mSettings->mInputChannel );
 
-				Frame frame;
 				frame.mData1 = 1;
 				frame.mFlags = 0;
 				frame.mStartingSampleInclusive = low_start;
 				frame.mEndingSampleInclusive = bit_end;
-
-				mResults->AddFrame( frame );
-				mResults->CommitResults();
+				frame_valid = true;
 			}
 			else 
 			{
 				// Might be a consolestop bit? 
 				// Put a '3' on just the low part
-				Frame frame;
 				frame.mData1 = 3;
 				frame.mFlags = 0;
 				frame.mStartingSampleInclusive = low_start;
 				frame.mEndingSampleInclusive = low_end;
-
-				mResults->AddFrame( frame );
-				mResults->CommitResults();
+				frame_valid = true;
 			}
 		}
 		else if (low_duration >= two_us_low && low_duration <= two_us_high)
 		{
 			// Controller stop bit
 			// Mark only the low portion
-			Frame frame;
 			frame.mData1 = 2;
 			frame.mFlags = 0;
 			frame.mStartingSampleInclusive = low_start;
 			frame.mEndingSampleInclusive = low_end;
-
-			mResults->AddFrame( frame );
-			mResults->CommitResults();
+			frame_valid = true;
 		}
 		else if (low_duration >= three_us_low && low_duration <= three_us_high)
 		{
@@ -259,14 +256,11 @@ void N64Analyzer::WorkerThread()
 				U64 halfway = low_start + (bit_end - low_start) / 2.0;
 				mResults->AddMarker( halfway, AnalyzerResults::Dot, mSettings->mInputChannel );
 
-				Frame frame;
 				frame.mData1 = 0;
 				frame.mFlags = 0;
 				frame.mStartingSampleInclusive = low_start;
 				frame.mEndingSampleInclusive = bit_end;
-
-				mResults->AddFrame( frame );
-				mResults->CommitResults();
+				frame_valid = true;
 			}
 			else 
 			{
@@ -274,31 +268,45 @@ void N64Analyzer::WorkerThread()
 			}
 		}
 
+		if (frame_valid)
+		{
+			if (frame.mData1 == 0 || frame.mData1 == 1)
+			{
+				frames.push_back(frame);
+			}
 
-		//bool success_flag = false;
-		//U64 bit_val = 0;
-		//if (duration >= one_us_low && duration <= one_us_high)
-		//{
-		//	success_flag = true;
-		//	bit_val = 1;
-		//}
-		//else if (duration >= two_us_low && duration <= two_us_high)
-		//{
-		//	success_flag = true;
-		//	bit_val = 2;
-		//}
-		//else if (duration >= three_us_low && duration <= three_us_high)
-		//{
-		//	success_flag = true;
-		//	bit_val = 3;
-		//}
+			if (frames.size() == 8)
+			{
+				// Collect them as a byte
+				frame.mData1 = (frames[0].mData1 << 7) | (frames[1].mData1 << 6) | (frames[2].mData1 << 5) | (frames[3].mData1 << 4) | (frames[4].mData1 << 3) | (frames[5].mData1 << 2) | (frames[6].mData1 << 1) | (frames[7].mData1 << 0);
+				frame.mFlags = 0;
+				frame.mStartingSampleInclusive = frames[0].mStartingSampleInclusive;
+				frame.mEndingSampleInclusive = frames[7].mEndingSampleInclusive;
+				
+				mResults->AddFrame( frame );
+				mResults->CommitResults();
 
-		//// 
+				frames.clear();
+			}
 
-		//if (success_flag)
-		//{
-		//	
-		//}
+			// Check how long it is until
+			if (frames.size() > 0)
+			{
+				if ((high_end - frames[frames.size() - 1].mEndingSampleInclusive) > one_us_exact)
+				{
+					for (int i = 0; i < frames.size(); i++)
+					{
+						mResults->AddFrame( frames[i] );
+						mResults->CommitResults();
+					}
+
+					frames.clear();
+				}
+			}
+			
+		}
+
+
 
 		ReportProgress( high_end );
 
